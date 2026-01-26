@@ -1,0 +1,12 @@
+[project]
+name = "scripts"
+version = "0.1.0"
+description = "Apple Security Advisory Scraper"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "requests",
+    "beautifulsoup4",
+    "markdownify",
+    "nvdlib"
+]

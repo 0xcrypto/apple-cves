@@ -281,11 +281,13 @@ async def process_archive(session, url, nvd_queue, processed_urls):
                      # Actually process_advisory is async, we can just await it or add to list?
                      # Since we are in a task, awaiting is fine.
                      await process_advisory(session, href, text, nvd_queue)
-                     count += 1
 
 async def main():
     print("Starting async scraper...")
-    async with aiohttp.ClientSession() as session:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15"
+    }
+    async with aiohttp.ClientSession(headers=headers) as session:
         soup = await get_soup(session, APPLE_SECURITY_UPDATES_URL)
         if not soup: return
 
@@ -309,3 +311,6 @@ async def main():
         worker_task.cancel()
         
     update_readme()
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -5,8 +5,8 @@ description = "Apple Security Advisory Scraper"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "requests",
+    "aiohttp",
     "beautifulsoup4",
     "markdownify",
-    "nvdlib"
+    "requests"
 ]

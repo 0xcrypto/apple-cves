@@ -202,31 +202,72 @@ async def nvd_worker(session, queue):
 def update_readme():
     print("Updating README.md...")
     readme_path = os.path.join(BASE_DIR, "README.md")
-    content = "# Apple CVEs\n\nThis repository contains scripts for monitoring Apple Security Advisories, finding available CVEs and exploits.\n\n## Scraped CVEs\n\n| Severity | CVE | Platforms |\n| :--- | :--- | :--- |\n"
-    severities = ["Critical", "High", "Medium", "Low"]
     
-    for severity in severities:
+    content = "# Apple CVEs\n\nThis repository contains scripts for monitoring Apple Security Advisories, finding available CVEs and exploits.\n\n## Scraped CVEs\n\n"
+    
+    # Collect all data first
+    # Map: CVE -> {severity: S, platforms: {p1: link1, p2: link2}}
+    cve_data = {}
+    
+    all_technologies = ["iOS", "iPadOS", "macOS", "tvOS", "watchOS", "visionOS", "Safari", "Xcode"]
+    tech_columns = ["iOS", "iPadOS", "macOS", "tvOS", "watchOS", "visionOS", "Safari", "Xcode"]
+
+    for severity in SEVERITY_MAPPING.values():
         severity_dir = os.path.join(BASE_DIR, severity)
         if not os.path.exists(severity_dir): continue
+        
         cves = sorted([d for d in os.listdir(severity_dir) if d.startswith("CVE-")])
         for cve in cves:
+            if cve not in cve_data:
+                cve_data[cve] = {"severity": severity, "platforms": {}}
+            
+            # If same CVE in multiple severity folders (shouldn't happen with our logic but finding standard), logic prioritizes last found or consistent.
+            # Our scraper ensures 1 severity per CVE usually.
+            
             cve_dir = os.path.join(severity_dir, cve)
             if not os.path.isdir(cve_dir): continue
-            platforms = sorted([d for d in os.listdir(cve_dir) if os.path.isdir(os.path.join(cve_dir, d))])
-            platform_links = []
-            for platform in platforms:
-                link_path = f"{severity}/{cve}/{platform}/advisory.md"
-                if os.path.exists(os.path.join(cve_dir, platform, "advisory.md")):
-                   platform_links.append(f"[{platform}]({link_path})")
-            if platform_links:
-                content += f"| {severity} | {cve} | {', '.join(platform_links)} |\n"
+            
+            found_platforms = [d for d in os.listdir(cve_dir) if os.path.isdir(os.path.join(cve_dir, d))]
+            for p in found_platforms:
+                link = f"{severity}/{cve}/{p}/advisory.md"
+                cve_data[cve]["platforms"][p] = link
+
+    # Build Table
+    # Header
+    header = "| CVE | Severity | " + " | ".join(tech_columns) + " | Other |\n"
+    separator = "| :--- | :--- | " + " | ".join([":---:"] * len(tech_columns)) + " | :---: |\n"
+    content += header + separator
+    
+    # Sort CVEs reverse chronologically (approx by ID)
+    sorted_cves = sorted(cve_data.keys(), reverse=True)
+    
+    for cve in sorted_cves:
+        data = cve_data[cve]
+        row = f"| {cve} | {data['severity']} |"
+        
+        # Tech columns
+        for tech in tech_columns:
+            if tech in data["platforms"]:
+                row += f" [✅]({data['platforms'][tech]}) |"
+            else:
+                row += " |"
+        
+        # Other column
+        others = []
+        for p, link in data["platforms"].items():
+            if p not in tech_columns:
+                others.append(f"[{p}]({link})")
+        
+        row += f" {', '.join(others)} |\n"
+        content += row
+
     with open(readme_path, "w", encoding="utf-8") as f:
         f.write(content)
     print("README.md updated.")
 
 async def extract_links_from_soup(soup, session, nvd_queue, tasks, processed_urls):
     links = soup.find_all('a', href=True)
-    count = 0
+    archive_tasks = []
     for link in links:
         text = link.get_text().strip()
         href = link['href']
@@ -254,20 +295,21 @@ async def extract_links_from_soup(soup, session, nvd_queue, tasks, processed_url
         if any(x in text for x in ["iOS", "iPadOS", "macOS", "watchOS", "tvOS", "Safari", "Xcode", "visionOS"]):
             if href not in processed_urls:
                 processed_urls.add(href)
-                tasks.append(process_advisory(session, href, text, nvd_queue))
-                count += 1
+                archive_tasks.append(process_advisory(session, href, text, nvd_queue))
     
-    return count
+    if archive_tasks:
+        print(f"Main Page: Processing {len(archive_tasks)} advisories concurrently...")
+        await asyncio.gather(*archive_tasks)
+    
+    return len(archive_tasks)
 
 async def process_archive(session, url, nvd_queue, processed_urls):
     print(f"Processing archive page: {url}")
     soup = await get_soup(session, url)
     if not soup: return
     
-    # Extract advisory links from this archive page
-    # Just reuse logic but we can't easily recurse cleanly with current structure unless we refactor.
-    # Inline extraction for archive:
     links = soup.find_all('a', href=True)
+    archive_tasks = []
     for link in links:
         text = link.get_text().strip()
         href = link['href']
@@ -277,10 +319,11 @@ async def process_archive(session, url, nvd_queue, processed_urls):
              if "Apple security updates" not in text and "archive" not in text.lower():
                  if href not in processed_urls:
                      processed_urls.add(href)
-                     # We can't await process_advisory here if we want to batch? 
-                     # Actually process_advisory is async, we can just await it or add to list?
-                     # Since we are in a task, awaiting is fine.
-                     await process_advisory(session, href, text, nvd_queue)
+                     archive_tasks.append(process_advisory(session, href, text, nvd_queue))
+    
+    if archive_tasks:
+        print(f"Archive {url}: Processing {len(archive_tasks)} advisories concurrently...")
+        await asyncio.gather(*archive_tasks)
 
 async def main():
     print("Starting async scraper...")
@@ -292,7 +335,8 @@ async def main():
         if not soup: return
 
         nvd_queue = asyncio.Queue()
-        worker_task = asyncio.create_task(nvd_worker(session, nvd_queue))
+        # Spawn 3 workers to try and speed up processing
+        workers = [asyncio.create_task(nvd_worker(session, nvd_queue)) for _ in range(3)]
 
         tasks = []
         processed_urls = set()
@@ -301,14 +345,12 @@ async def main():
         await extract_links_from_soup(soup, session, nvd_queue, tasks, processed_urls)
         
         # Run gathered tasks (advisories + archives)
-        # Note: archives will spawn their own sub-processing or we need to manage them.
-        # My process_archive creates awaits immediately.
-        # So wait for the tasks gathering:
         await asyncio.gather(*tasks)
         
         # Wait for queue
         await nvd_queue.join()
-        worker_task.cancel()
+        for w in workers:
+            w.cancel()
         
     update_readme()
 

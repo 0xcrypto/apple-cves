@@ -1337,6 +1337,7 @@ This repository contains scripts for monitoring Apple Security Advisories, findi
 | CVE-2023-47100 | Medium | | | [✅](Medium/CVE-2023-47100/macOS/advisory.md) | | | | | |  |
 | CVE-2023-45866 | Medium | [✅](Medium/CVE-2023-45866/iOS/advisory.md) | [✅](Medium/CVE-2023-45866/iPadOS/advisory.md) | [✅](Medium/CVE-2023-45866/macOS/advisory.md) | | | | | |  |
 | CVE-2023-4504 | High | | | [✅](High/CVE-2023-4504/macOS/advisory.md) | | | | | |  |
+| CVE-2023-43010 | High | [✅](High/CVE-2023-43010/iOS/advisory.md) | [✅](High/CVE-2023-43010/iPadOS/advisory.md) | [✅](High/CVE-2023-43010/macOS/advisory.md) | | | | | |  |
 | CVE-2023-43000 | High | [✅](High/CVE-2023-43000/iOS/advisory.md) | [✅](High/CVE-2023-43000/iPadOS/advisory.md) | [✅](High/CVE-2023-43000/macOS/advisory.md) | | | | [✅](High/CVE-2023-43000/Safari/advisory.md) | |  |
 | CVE-2023-42983 | Medium | | | [✅](Medium/CVE-2023-42983/macOS/advisory.md) | | | | | |  |
 | CVE-2023-42982 | Medium | | | [✅](Medium/CVE-2023-42982/macOS/advisory.md) | | | | | |  |

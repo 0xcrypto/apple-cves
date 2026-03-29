@@ -284,7 +284,7 @@ def update_readme():
     # joining severity_count
     for severity, counts in severity_counts.items():
         row = (
-            f"| {severity} | "
+            f"| [{severity}]({severity}/) | "
             + " | ".join([f"{counts[p]}" for p in tech_columns])
             + " |\n"
         )

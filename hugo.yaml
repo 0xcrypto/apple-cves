@@ -45,6 +45,9 @@ params:
   search:
     enable: true
     type: flexsearch
+    flexsearch:
+      index: content
+      tokenize: forward
 
   blog:
     list:
@@ -61,9 +64,15 @@ menu:
     - name: iPadOS
       url: /iPadOS/
       weight: 3
+    - name: Safari
+      url: /Safari/
+      weight: 4
+    - name: Xcode
+      url: /Xcode/
+      weight: 5
     - identifier: more
       name: More ▾
-      weight: 4
+      weight: 6
     - name: watchOS
       url: /watchOS/
       parent: more
@@ -76,16 +85,8 @@ menu:
       url: /visionOS/
       parent: more
       weight: 3
-    - name: Safari
-      url: /Safari/
-      parent: more
-      weight: 4
-    - name: Xcode
-      url: /Xcode/
-      parent: more
-      weight: 5
     - name: GitHub ↗
-      url: https://github.com/vi/apple-cves
+      url: https://github.com/0xcrypto/applesec
       weight: 99
       params:
         type: icon

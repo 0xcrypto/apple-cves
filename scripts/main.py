@@ -48,6 +48,18 @@ PLATFORM_ORDER = [
 ]
 PLATFORM_WEIGHT = {p: i + 1 for i, p in enumerate(PLATFORM_ORDER)}
 
+ADVISORY_KEYWORDS = [
+    "iOS",
+    "iPadOS",
+    "macOS",
+    "watchOS",
+    "tvOS",
+    "Safari",
+    "Xcode",
+    "visionOS",
+]
+APPLE_CONCURRENCY = 150  # max concurrent requests to support.apple.com
+
 # NVD in-process cache and rate-limit semaphore (initialised inside main())
 _NVD_CACHE: dict = {}
 _NVD_SEMAPHORE: asyncio.Semaphore | None = None
@@ -501,7 +513,7 @@ async def nvd_worker(session, queue):
                     severity = s
                     break
 
-        print(f"{cve} ({platform}) → {severity}")
+        # print(f"{cve} ({platform}) → {severity}")
 
         # ── Step 3: always write Hugo CVE page (picks up template changes) ────
         _ensure_platform_index(platform)
@@ -513,7 +525,7 @@ async def nvd_worker(session, queue):
 
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(_make_cve_page(item, cve, severity, nvd_data))
-        print(f"Saved {out_path}")
+        # print(f"Saved {out_path}")
 
         queue.task_done()
 
@@ -600,22 +612,24 @@ def update_readme():
 
 
 # ---------------------------------------------------------------------------
-# Link extraction helpers (unchanged logic, refactored)
+# Phase 1 — URL discovery
 # ---------------------------------------------------------------------------
 
 
-async def extract_links_from_soup(soup, session, nvd_queue, tasks, processed_urls):
-    ADVISORY_KEYWORDS = [
-        "iOS",
-        "iPadOS",
-        "macOS",
-        "watchOS",
-        "tvOS",
-        "Safari",
-        "Xcode",
-        "visionOS",
-    ]
-    archive_tasks = []
+async def _discover_advisory_urls(
+    session: aiohttp.ClientSession,
+) -> list[tuple[str, str]]:
+    """
+    Fetch only the main Apple security releases page plus every archive index
+    page (≈10-20 requests total) and return a deduplicated list of
+    (advisory_url, title) pairs for all individual advisories found.
+    """
+    soup = await get_soup(session, APPLE_SECURITY_UPDATES_URL)
+    if not soup:
+        return []
+
+    advisories: dict[str, str] = {}  # url -> title (deduped)
+    archive_hrefs: list[str] = []
 
     for link in soup.find_all("a", href=True):
         text = link.get_text().strip()
@@ -623,68 +637,39 @@ async def extract_links_from_soup(soup, session, nvd_queue, tasks, processed_url
         if href.startswith("/"):
             href = "https://support.apple.com" + href
 
-        # Discover archive pages (2020+)
         if "Apple security updates" in text:
             years = re.findall(r"\d{4}", text)
             if years and any(int(y) >= 2020 for y in years):
-                if href not in processed_urls:
-                    print(f"Found archive: {text} — {href}")
-                    processed_urls.add(href)
-                    tasks.append(
-                        process_archive(session, href, nvd_queue, processed_urls)
-                    )
+                archive_hrefs.append(href)
             continue
 
         if "archive" in text.lower():
             continue
 
         if any(kw in text for kw in ADVISORY_KEYWORDS):
-            if href not in processed_urls:
-                processed_urls.add(href)
-                archive_tasks.append(process_advisory(session, href, text, nvd_queue))
+            advisories[href] = text
 
-    if archive_tasks:
-        print(f"Main page: processing {len(archive_tasks)} advisories concurrently…")
-        await asyncio.gather(*archive_tasks)
+    # Fetch all archive index pages concurrently (small number, no semaphore needed)
+    print(f"Fetching {len(archive_hrefs)} archive index pages…")
+    archive_soups = await asyncio.gather(
+        *[get_soup(session, href) for href in archive_hrefs],
+        return_exceptions=True,
+    )
 
-
-async def process_archive(session, url, nvd_queue, processed_urls):
-    print(f"Processing archive page: {url}")
-    soup = await get_soup(session, url)
-    if not soup:
-        return
-
-    ADVISORY_KEYWORDS = [
-        "iOS",
-        "iPadOS",
-        "macOS",
-        "watchOS",
-        "tvOS",
-        "Safari",
-        "Xcode",
-        "visionOS",
-    ]
-    archive_tasks = []
-
-    for link in soup.find_all("a", href=True):
-        text = link.get_text().strip()
-        href = link["href"]
-        if href.startswith("/"):
-            href = "https://support.apple.com" + href
-
-        if "Apple security updates" in text or "archive" in text.lower():
+    for archive_soup in archive_soups:
+        if not isinstance(archive_soup, BeautifulSoup):
             continue
+        for link in archive_soup.find_all("a", href=True):
+            text = link.get_text().strip()
+            href = link["href"]
+            if href.startswith("/"):
+                href = "https://support.apple.com" + href
+            if "Apple security updates" in text or "archive" in text.lower():
+                continue
+            if any(kw in text for kw in ADVISORY_KEYWORDS) and href not in advisories:
+                advisories[href] = text
 
-        if any(kw in text for kw in ADVISORY_KEYWORDS):
-            if href not in processed_urls:
-                processed_urls.add(href)
-                archive_tasks.append(process_advisory(session, href, text, nvd_queue))
-
-    if archive_tasks:
-        print(
-            f"Archive {url}: processing {len(archive_tasks)} advisories concurrently…"
-        )
-        await asyncio.gather(*archive_tasks)
+    return list(advisories.items())
 
 
 # ---------------------------------------------------------------------------
@@ -695,12 +680,11 @@ async def process_archive(session, url, nvd_queue, processed_urls):
 async def main():
     global _NVD_SEMAPHORE
     _NVD_SEMAPHORE = asyncio.Semaphore(1)
-    print("Starting async scraper…")
 
-    # Ensure top-level Hugo content skeleton exists
     _ensure_home_index()
     _ensure_changelogs_index()
 
+    print("Starting async scraper…")
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -709,23 +693,38 @@ async def main():
         )
     }
 
-    async with aiohttp.ClientSession(headers=headers) as session:
-        soup = await get_soup(session, APPLE_SECURITY_UPDATES_URL)
-        if not soup:
-            return
+    # Higher connection pool so 150 concurrent Apple requests don't queue inside aiohttp
+    connector = aiohttp.TCPConnector(limit=300, limit_per_host=APPLE_CONCURRENCY + 50)
 
-        nvd_queue = asyncio.Queue()
+    async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+        # ── Phase 1: discover every advisory URL (fast — only archive index pages) ──
+        print("Phase 1 — discovering advisory URLs…")
+        advisory_urls = await _discover_advisory_urls(session)
+        print(f"Found {len(advisory_urls)} advisories to process")
+
+        # ── Phase 2: fetch all advisory pages, bounded to APPLE_CONCURRENCY at once ──
+        nvd_queue: asyncio.Queue = asyncio.Queue()
         workers = [
             asyncio.create_task(nvd_worker(session, nvd_queue)) for _ in range(3)
         ]
 
-        tasks = []
-        processed_urls = set()
+        apple_sem = asyncio.Semaphore(APPLE_CONCURRENCY)
 
-        await extract_links_from_soup(soup, session, nvd_queue, tasks, processed_urls)
-        await asyncio.gather(*tasks)
+        async def bounded_process(url: str, title: str) -> None:
+            async with apple_sem:
+                await process_advisory(session, url, title, nvd_queue)
+
+        print(
+            f"Phase 2 — fetching {len(advisory_urls)} advisory pages "
+            f"(≤{APPLE_CONCURRENCY} concurrent)…"
+        )
+        await asyncio.gather(
+            *[bounded_process(url, title) for url, title in advisory_urls]
+        )
+
+        # ── Phase 3: drain the NVD queue ──────────────────────────────────────────
+        print("Phase 3 — waiting for NVD lookups to complete…")
         await nvd_queue.join()
-
         for w in workers:
             w.cancel()
 

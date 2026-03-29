@@ -1,4 +1,4 @@
-module github.com/vi/apple-cves
+module github.com/0xcrypto/applesec
 
 go 1.22
 
